@@ -21,6 +21,7 @@ pip install -r requirements.txt
 - [IQL]().
 - [SQL]().
 - [EQL]().
+- [INAC]().
 
 
 # References
@@ -29,5 +30,7 @@ pip install -r requirements.txt
     - Ashvin Nair, Abhishek Gupta, Murtaza Dalal, Sergey Levine. 2020.
 - [Offline Reinforcement Learning with Implicit Q-Learning](https://arxiv.org/abs/2110.06169)
     - Ilya Kostrikov, Ashvin Nair, Sergey Levine. 2021.
+- [The In-Sample Softmax for Offline Reinforcement Learning](https://arxiv.org/abs/2302.14372)
+    - Chenjun Xiao, Han Wang, Yangchen Pan, Adam White, Martha White. 2023.
 - [Offline RL with No OOD Actions: In-Sample Learning via Implicit Value Regularization](https://arxiv.org/abs/2303.15810)
     - Haoran Xu, Li Jiang, Jianxiong Li, Zhuoran Yang, Zhaoran Wang, Victor Wai Kin Chan, Xianyuan Zhan. 2023.

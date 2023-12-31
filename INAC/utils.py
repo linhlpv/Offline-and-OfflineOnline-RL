@@ -9,6 +9,8 @@ from torch import nn
 
 EXP_ADV_MAX = 100.0
 ENVS_WITH_GOAL = ("antmaze", "pen", "door", "hammer", "relocate")
+ADV_MAX = 1000.0
+ADV_MIN = 1e-8
 
 TensorBatch = List[torch.Tensor]
 

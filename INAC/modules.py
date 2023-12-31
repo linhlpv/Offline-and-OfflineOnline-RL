@@ -7,8 +7,8 @@ import torch.nn.functional as F
 import numpy as np
 from typing import Tuple  
 
-MIN_LOG_STD = -20.0
-MAX_LOG_STD = 2.0
+MIN_LOG_STD = -6.0
+MAX_LOG_STD = 0.0
 
 class Squeeze(nn.Module):
     def __init__(
@@ -19,7 +19,6 @@ class Squeeze(nn.Module):
         
     def forward(self,x):
         return x.squeeze(self.dim)
-
 class MLP(nn.Module):
     def __init__(
         self,
@@ -28,6 +27,7 @@ class MLP(nn.Module):
         out_activation_function=None,
         squeeze_output=False,
         dropout=0.0,
+        layer_norm=False,
     ):
         super().__init__()
         n_dims = len(dims)
@@ -36,6 +36,10 @@ class MLP(nn.Module):
         layers = []
         for i in range(n_dims - 2):
             layers.append(nn.Linear(dims[i], dims[i+1]))
+            if layer_norm:
+                layers.append(nn.LayerNorm(dims[i+1]))
+            else:
+                layers.append(nn.Identity())
             layers.append(activation_function())
             if dropout > 0.0:
                 layers.append(nn.Dropout(dropout))
@@ -51,7 +55,7 @@ class MLP(nn.Module):
     
     def forward(self, x):
         return self.mlp(x)
-        
+       
         
 
 class GaussianPolicy(nn.Module):
@@ -74,49 +78,33 @@ class GaussianPolicy(nn.Module):
         self.log_std = nn.Parameter(torch.zeros(action_dim, dtype=torch.float32))
         self.max_action = max_action
         
-    def forward(self, state):
+    def get_policy(self, state):
         mean = self.net(state)
-        std = torch.exp(self.log_std.clamp(MIN_LOG_STD, MAX_LOG_STD))
-        return Normal(mean, std)    
-        
+        # std = torch.exp(self.log_std.clamp(MIN_LOG_STD, MAX_LOG_STD))
+        # use soft clipping of the log std. same with the author implementation
+        log_std = MIN_LOG_STD + (torch.tanh(self.log_std) + 1) * (MAX_LOG_STD - MIN_LOG_STD) / 2
+        std = torch.exp(log_std)
+        return Normal(mean, std)   
+    
+    def log_prob(self, state, action):
+        policy = self.get_policy(state)
+        log_prob = policy.log_prob(action).sum(axis=-1, keepdim=False) # keepdim=True or False ?
+        return log_prob
+
+    def forward(self, state):
+        policy = self.get_policy(state)
+        action = policy.rsample().clamp(self.max_action, self.max_action)
+        log_prob = policy.log_prob(action).sum(axis=-1, keepdim=False)
+        return action, log_prob
+    
     @torch.no_grad()
     def act(self, state, device="cpu"):
         state = torch.tensor(state.reshape(1, -1), dtype=torch.float32, device=device)
-        dist = self(state)
+        dist = self.get_policy(state)
         action = dist.mean if not self.training else dist.sample()
         action = torch.clamp(self.max_action * action, -self.max_action, self.max_action)
         return action.cpu().data.numpy().flatten()
     
-
-class DeterministicPolicy(nn.Module):
-    def __init__(
-        self,
-        state_dim, 
-        action_dim,
-        max_action,
-        hidden_dim=256,
-        n_hiddens=2,
-        dropout=0.0,
-    ):
-        super().__init__()
-        self.net = MLP(
-            [state_dim, *([hidden_dim]*n_hiddens), action_dim],
-            activation_function=nn.ReLU,
-            out_activation_function=nn.Tanh,
-            dropout=dropout
-        )
-        self.max_action = max_action
-        
-    def forward(self, state):
-        return self.net(state)
-        
-    @torch.no_grad()
-    def act(self, state, device="cpu"):
-        state = torch.tensor(state.reshape(1, -1), dtype=torch.float32, device=device)
-        return (
-            torch.clamp(self(state) * self.max_action, -self.max_action, self.max_action).cpu().data.numpy().flatten()
-        )
-
 
 class DoubleQNetwork(nn.Module):
     def __init__(
@@ -125,6 +113,7 @@ class DoubleQNetwork(nn.Module):
         action_dim,
         hidden_dim=256,
         n_hidden=2,
+        layer_norm=True,
     ):
         super().__init__()
         self.qf1 = MLP(
@@ -132,12 +121,14 @@ class DoubleQNetwork(nn.Module):
             activation_function=nn.ReLU,
             dropout=0.0,
             squeeze_output=True,
+            layer_norm=layer_norm,
         )        
         self.qf2 = MLP(
             [state_dim + action_dim, *([hidden_dim]*n_hidden), 1],
             activation_function=nn.ReLU,
             dropout=0.0,
             squeeze_output=True,
+            layer_norm=layer_norm,
         )
         
     def both(self, state, action):
@@ -153,6 +144,7 @@ class ValueNetwork(nn.Module):
         state_dim,
         hidden_dim=256,
         n_hidden=2,
+        layer_norm=True,
     ):
         super().__init__()
         self.vf = MLP(
@@ -160,6 +152,7 @@ class ValueNetwork(nn.Module):
             activation_function=nn.ReLU,
             dropout=0.0,
             squeeze_output=True,
+            layer_norm=True
         )
         
     def forward(self, state):

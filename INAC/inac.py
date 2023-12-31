@@ -10,21 +10,21 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from typing import Dict, Any, List, Tuple
 import copy
 
-from utils import asymmetric_l2_loss, soft_update, TensorBatch, ENVS_WITH_GOAL, EXP_ADV_MAX
+from utils import soft_update, TensorBatch, ENVS_WITH_GOAL, EXP_ADV_MAX, ADV_MAX, ADV_MIN
 
-class ImplicitQLearning:
+class InAC:
     def __init__(
         self,
         max_action: float,
         actor: nn.Module,
         actor_optimizer: torch.optim.Optimizer,
+        behavior_policy: nn.Module,
+        behavior_optimizer: torch.optim.Optimizer,
         q_network: nn.Module,
         q_optimizer: torch.optim.Optimizer,
         v_network: nn.Module,
         v_optimizer: torch.optim.Optimizer,
-        iql_tau: float = 0.7,
-        beta: float = 3.0,
-        max_steps: int = 1000000,
+        inac_tau: float = 0.33,
         discount: float = 0.99,
         tau: float = 0.005,
         device: str = "cpu",
@@ -37,72 +37,83 @@ class ImplicitQLearning:
         self.v_optimizer = v_optimizer
         self.q_optimizer = q_optimizer
         self.actor_optimizer = actor_optimizer
-        self.actor_lr_schedule = CosineAnnealingLR(self.actor_optimizer, max_steps)
-        self.iql_tau = iql_tau
-        self.beta = beta
+        self.behavior = behavior_policy
+        self.behavior_optimizer = behavior_optimizer
+        
         self.discount = discount
         self.tau = tau
+        self.inac_tau = inac_tau
 
         self.total_it = 0
         self.device = device
+        
+    def _update_behavior(self, observations, actions, log_dict):
+        behavior_loss = self.behavior.log_prob(observations, actions).mean()
+        log_dict['behavior'] = behavior_loss.item()
+        self.behavior_optimizer.zero_grad()
+        behavior_loss.backward()
+        self.behavior_optimizer.step()
 
-    def _update_v(self, observations, actions, log_dict):
+    def _update_v(self, observations, log_dict):
         # Update value function
         with torch.no_grad():
+            actions, log_probs = self.actor(observations)
             target_q = self.q_target(observations, actions)
+            target_q = target_q - self.inac_tau * log_probs
 
         v = self.vf(observations)
-        adv = target_q - v
-        v_loss = asymmetric_l2_loss(adv, self.iql_tau)
+        v_loss = F.mse_loss(v, target_q)
         log_dict["value_loss"] = v_loss.item()
         self.v_optimizer.zero_grad()
         v_loss.backward()
         self.v_optimizer.step()
-        return adv
 
     def _update_q(
         self,
-        next_v: torch.Tensor,
         observations: torch.Tensor,
         actions: torch.Tensor,
         rewards: torch.Tensor,
+        next_observations: torch.Tensor,
         terminals: torch.Tensor,
         log_dict: Dict,
     ):
-        targets = rewards + (1.0 - terminals.float()) * self.discount * next_v.detach()
+        with torch.no_grad():
+            # based on the author implementation to compute target 
+            next_actions, next_log_probs = self.actor(next_observations)
+            target = self.q_target(next_observations, next_actions)
+            target = target - self.inac_tau * next_log_probs 
+            # # based on the paper Eq (16)
+            # target = self.vf(next_observations)
+            target = rewards + self.discount * (1.0 - terminals.float()) * target
+            
         qs = self.qf.both(observations, actions)
-        q_loss = sum(F.mse_loss(q, targets) for q in qs) / len(qs)
+        q_loss = sum(F.mse_loss(q, target) for q in qs) / len(qs)
         log_dict["q_loss"] = q_loss.item()
         self.q_optimizer.zero_grad()
         q_loss.backward()
         self.q_optimizer.step()
 
         # Update target Q network
-        soft_update(self.q_target, self.qf, self.tau)
+        # soft_update(self.q_target, self.qf, self.tau)
 
     def _update_policy(
         self,
-        adv: torch.Tensor,
         observations: torch.Tensor,
         actions: torch.Tensor,
         log_dict: Dict,
     ):
-        exp_adv = torch.exp(self.beta * adv.detach()).clamp(max=EXP_ADV_MAX)
-        policy_out = self.actor(observations)
-        if isinstance(policy_out, torch.distributions.Distribution):
-            bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
-        elif torch.is_tensor(policy_out):
-            if policy_out.shape != actions.shape:
-                raise RuntimeError("Actions shape missmatch")
-            bc_losses = torch.sum((policy_out - actions) ** 2, dim=1)
-        else:
-            raise NotImplementedError
-        policy_loss = torch.mean(exp_adv * bc_losses)
+        log_prob = self.actor.log_prob(observations, actions)
+        with torch.no_grad():
+            target_q = self.qf(observations, actions)
+            v = self.vf(observations)
+            behavior_log_prob = self.behavior.log_prob(observations, actions)
+            exp_adv = torch.exp((target_q - v) / self.inac_tau - behavior_log_prob).clamp(ADV_MIN, ADV_MAX)    
+        
+        policy_loss = torch.mean(-exp_adv * log_prob)
         log_dict["actor_loss"] = policy_loss.item()
         self.actor_optimizer.zero_grad()
         policy_loss.backward()
         self.actor_optimizer.step()
-        self.actor_lr_schedule.step()
 
     def train(self, batch: TensorBatch):
         self.total_it += 1
@@ -115,16 +126,19 @@ class ImplicitQLearning:
         ) = batch
         log_dict = {}
 
-        with torch.no_grad():
-            next_v = self.vf(next_observations)
+        # Update behavior policy
+        self._update_behavior(observations, actions, log_dict)
         # Update value function
-        adv = self._update_v(observations, actions, log_dict)
+        adv = self._update_v(observations, log_dict)
         rewards = rewards.squeeze(dim=-1)
         dones = dones.squeeze(dim=-1)
         # Update Q function
-        self._update_q(next_v, observations, actions, rewards, dones, log_dict)
+        self._update_q(observations, actions, rewards, next_observations, dones, log_dict)
         # Update actor
-        self._update_policy(adv, observations, actions, log_dict)
+        self._update_policy(observations, actions, log_dict)
+        # Update target Q network
+        soft_update(self.q_target, self.qf, self.tau)
+
 
         return log_dict
 
@@ -136,7 +150,8 @@ class ImplicitQLearning:
             "v_optimizer": self.v_optimizer.state_dict(),
             "actor": self.actor.state_dict(),
             "actor_optimizer": self.actor_optimizer.state_dict(),
-            "actor_lr_schedule": self.actor_lr_schedule.state_dict(),
+            "behavior": self.behavior.state_dict(),
+            "behavior_optimizer": self.behavior_optimizer.state_dict(),
             "total_it": self.total_it,
         }
 
@@ -150,6 +165,6 @@ class ImplicitQLearning:
 
         self.actor.load_state_dict(state_dict["actor"])
         self.actor_optimizer.load_state_dict(state_dict["actor_optimizer"])
-        self.actor_lr_schedule.load_state_dict(state_dict["actor_lr_schedule"])
-
+        self.behavior_optimizer.load_state_dict(state_dict["behavior_optimizer"])
+        self.behavior.load_state_dict(state_dict["behavior"])
         self.total_it = state_dict["total_it"]

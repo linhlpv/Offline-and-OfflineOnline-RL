@@ -11,23 +11,21 @@ import torch
 import pyrallis  
 import datetime  
 
-from modules import GaussianPolicy, DeterministicPolicy, DoubleQNetwork, ValueNetwork
+from modules import GaussianPolicy, DoubleQNetwork, ValueNetwork
 from utils import *
 from replay_buffer import ReplayBuffer
 from logger import Logger
-from iql import ImplicitQLearning
+from inac import InAC
 
 @dataclass
 class TrainConfig:
     project: str = "off_offon_debug_1"
     group: str = ""
     name: str = "IQL"
-    env: str = "halfcheetah-medium-expert-v2"
+    env: str = "halfcheetah-medium-v2"
     discount: float = 0.99
     tau: float = 0.005
-    beta: float = 3.0
-    iql_tau: float = 0.7
-    iql_deterministic: bool = False
+    inac_tau: float = 0.33
     max_timesteps: int = int(1e6)
     buffer_size: int = int(2e6)
     batch_size: int = 256
@@ -109,16 +107,17 @@ def train(config: TrainConfig):
     
     q_network = DoubleQNetwork(state_dim, action_dim).to(config.device)
     v_network = ValueNetwork(state_dim).to(config.device)
-    actor = (
-        DeterministicPolicy(state_dim, action_dim, max_action, dropout=config.actor_dropout)
-        if config.iql_deterministic
-        else GaussianPolicy(
-            state_dim, action_dim, max_action, dropout=config.actor_dropout
-        )
+    actor = GaussianPolicy(
+        state_dim, action_dim, max_action, dropout=config.actor_dropout
+    ).to(config.device)
+    behavior_policy = GaussianPolicy(
+        state_dim, action_dim, max_action, dropout=config.actor_dropout
     ).to(config.device)
     v_optimizer = torch.optim.Adam(v_network.parameters(), lr=config.vf_lr)
     q_optimizer = torch.optim.Adam(q_network.parameters(), lr=config.qf_lr)
     actor_optimizer = torch.optim.Adam(actor.parameters(), lr=config.actor_lr)
+    behavior_optimizer = torch.optim.Adam(behavior_policy.parameters(), lr=config.actor_lr)
+    
     
     kwargs = {
         "max_action": max_action,
@@ -131,10 +130,10 @@ def train(config: TrainConfig):
         "discount": config.discount,
         "tau": config.tau,
         "device": config.device,
-        # IQL
-        "beta": config.beta,
-        "iql_tau": config.iql_tau,
-        "max_steps": config.max_timesteps,
+        "behavior_policy": behavior_policy,
+        "behavior_optimizer": behavior_optimizer,
+        # InAC
+        "inac_tau": config.inac_tau,
     }
     
     print("-------------------------")
@@ -142,7 +141,7 @@ def train(config: TrainConfig):
     print("-------------------------")
 
     # Initialize actor
-    trainer = ImplicitQLearning(**kwargs)
+    trainer = InAC(**kwargs)
     
     if config.load_model != "":
         policy_file = Path(config.load_model)
@@ -183,10 +182,6 @@ def train(config: TrainConfig):
                     trainer.state_dict(),
                     os.path.join(config.checkpoints_path, f"checkpoints_{t}.pt"),
                 )
-            # wandb.log(eval_log, step=trainer.total_it)
-            # for key, value in eval_log.items():
-            #     print(key, value)
-            #     writter.add_scalar(key, value, trainer.total_it)
             logger.log_dict(eval_log, trainer.total_it)
         
 if __name__ == "__main__":

@@ -79,6 +79,9 @@ class GaussianPolicy(nn.Module):
         self.log_std = nn.Parameter(torch.zeros(action_dim, dtype=torch.float32))
         self.max_action = max_action
         
+    def get_policy(self, state):
+        mean = self.net(state)
+        
     def forward(self, state):
         mean = self.net(state)
         std = torch.exp(self.log_std.clamp(MIN_LOG_STD, MAX_LOG_STD))

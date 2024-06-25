@@ -136,6 +136,3 @@ def wrap_env(
     if reward_scale != 1.0:
         env = gym.wrappers.TransformReward(env, scale_reward)
     return env
-
-
-

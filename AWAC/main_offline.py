@@ -19,7 +19,7 @@ from awac import AdvantageWeightedActorCritic
 
 @dataclass
 class TrainConfig:
-    project: str = "off_offon_debug_1"
+    project: str = "off_offon"
     group: str = ""
     name: str = "AWAC"
     env: str = "halfcheetah-medium-v2"

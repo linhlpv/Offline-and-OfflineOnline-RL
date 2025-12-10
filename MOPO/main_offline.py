@@ -41,7 +41,7 @@ walker2d-medium-expert-v2: rollout-length=1, penalty-coef=2.5
 
 @dataclass
 class TrainConfig:
-    project: str = "off_offon_debug_1"
+    project: str = "off_offon"
     group: str = ""
     name: str = "MOPO"
     algo_name: str = "mopo"

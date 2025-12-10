@@ -21,7 +21,7 @@ from tqdm import trange
 
 @dataclass
 class TrainConfig:
-    project: str = "off_offon_debug_3"
+    project: str = "off_offon"
     group: str = ""
     name: str = "SAC-N"
     env: str = "halfcheetah-medium-v2"

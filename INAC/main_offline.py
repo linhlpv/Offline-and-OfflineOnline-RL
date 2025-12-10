@@ -19,7 +19,7 @@ from inac import InAC
 
 @dataclass
 class TrainConfig:
-    project: str = "off_offon_debug_1"
+    project: str = "off_offon"
     group: str = ""
     name: str = "IQL"
     env: str = "halfcheetah-medium-v2"

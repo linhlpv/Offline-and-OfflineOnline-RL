@@ -19,7 +19,7 @@ from iql import ImplicitQLearning
 
 @dataclass
 class TrainConfig:
-    project: str = "off_offon_debug_1"
+    project: str = "off_offon"
     group: str = ""
     name: str = "IQL"
     env: str = "halfcheetah-medium-expert-v2"

@@ -97,8 +97,7 @@ def train(config: TrainConfig):
     eval_env = wrap_env(eval_env, state_mean=state_mean, state_std=state_std)
     replay_buffer = ReplayBuffer(state_dim, action_dim, config.buffer_size, device=config.device)
     replay_buffer.load_d4rl_dataset(dataset)
-    if config.normalize:
-        replay_buffer.normalize_states()
+
     max_action = float(env.action_space.high[0])
     
     if config.checkpoints_path is not None:

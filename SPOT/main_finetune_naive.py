@@ -60,7 +60,7 @@ class TrainConfig:
     normalize_reward: bool = True  # Normalize reward
     online_discount: float = 0.995  # Discount for online tuning
 
-    project: str = "off_offon_finetune_debug_2"
+    project: str = "off_offon"
     group: str = ""
     name: str = "spot"
     # Logger
